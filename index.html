@@ -112,6 +112,9 @@
     <br>
     <label for="queue_name_column">queue_name_column:</label>
     <input type="text" id="queue_name_column" value="queue_name">
+    <br>
+    <label for="pod_name_column">pod_name_column:</label>
+    <input type="text" id="pod_name_column" value="kubernetes.pod.name">
     <div id="outputContainer"></div>
     <script>
       function handleFile() {
@@ -127,7 +130,8 @@
             const timestampColumn = document.getElementById("timestamp_column").value;
             const railsTagsColumn = document.getElementById("rails_tags_column").value;
             const queueNameColumn = document.getElementById("queue_name_column").value;
-            const groupedData = groupData(tableData, jobUuidColumn, timestampColumn, railsTagsColumn, queueNameColumn);
+            const podNameColumn = document.getElementById("pod_name_column").value;
+            const groupedData = groupData(tableData, jobUuidColumn, timestampColumn, railsTagsColumn, queueNameColumn, podNameColumn);
             displayGroupedData(groupedData);
           };
           reader.readAsText(file);
@@ -175,12 +179,13 @@
       }
 
 
-      function groupData(data, jobUuidColumn, timestampColumn, railsTagsColumn, queueNameColumn) {
+      function groupData(data, jobUuidColumn, timestampColumn, railsTagsColumn, queueNameColumn, podNameColumn) {
         const runs = [];
         const jobUuidIndex = data[0].indexOf(jobUuidColumn);
         const timestampIndex = data[0].indexOf(timestampColumn);
         const tagsIndex = data[0].indexOf(railsTagsColumn);
         const queueNameIndex = data[0].indexOf(queueNameColumn);
+        const podNameIndex = data[0].indexOf(podNameColumn);
 
         const warningContainer = document.getElementById("warningContainer");
         warningContainer.innerHTML = "";
@@ -193,6 +198,7 @@
           const timestamp = row[timestampIndex];
           const tags = row[tagsIndex];
           const queueName = row[queueNameIndex];
+          const podName = tags.includes('enqueue') ? undefined : row[podNameIndex];
 
           let run = runs.find(r => r.jobUuid.includes(jobUuid))
 
@@ -202,10 +208,17 @@
               queueName,
               events: [],
             };
+            if (podName) run.podName = podName;
             runs.push(run);
           } else {
             if (run.queueName !== queueName) {
               const warningMessage = `Warning: Inconsistent queue_name for job_uuid ${jobUuid}`;
+              warningContainer.classList.remove('hide');
+              warningContainer.classList.add('show');
+              warningContainer.innerHTML += `<div class="warning">${warningMessage}</div>`;
+            }
+            if (podName && run.podName !== podName) {
+              const warningMessage = `${typeof run.podName} Warning: Inconsistent pod_name (${podName} != ${run.podName}) for job_uuid ${jobUuid}`;
               warningContainer.classList.remove('hide');
               warningContainer.classList.add('show');
               warningContainer.innerHTML += `<div class="warning">${warningMessage}</div>`;
@@ -266,6 +279,46 @@
         }
       }
 
+      function displayWorkerByQueues(groupedData, container) {
+        const workerByQueue = groupedData.reduce((acc, cur) => {
+          arr = cur.podName.split('-');
+          arr.pop();
+          arr.pop();
+          workerPrefix = arr.join('-');
+
+          if (!acc[cur.queueName]) {
+            acc[cur.queueName] = {};
+          }
+          const queue = acc[cur.queueName];
+          if (queue[workerPrefix]) {
+            queue[workerPrefix] += 1;
+          } else {
+            queue[workerPrefix] = 1;
+          }
+
+          return acc;
+        }, {});
+
+        Object.entries(workerByQueue).forEach(entry => {
+          const [queue, workers] = entry;
+          const queueName = document.createElement("p");
+          queueName.textContent = "Workers for queue " + queue + " :";
+
+          const list = document.createElement("ul");
+
+          Object.entries(workers).forEach(worker => {
+            const [prefix, number] = worker;
+
+            const elem = document.createElement("li");
+            elem.textContent = prefix + " : " + number;
+            list.appendChild(elem);
+
+          })
+          queueName.appendChild(list);
+          container.appendChild(queueName);
+        });
+      }
+
       function displayGroupedData(groupedData) {
         const outputContainer = document.getElementById("outputContainer");
         outputContainer.innerHTML = "";
@@ -283,6 +336,9 @@
         const average = document.createElement("p");
         average.textContent = "Average time in queue : " + (stats.average / 1000).toFixed(2) + " s";
         outputContainer.appendChild(average);
+
+        displayWorkerByQueues(groupedData, outputContainer);
+
 
         const graph = document.createElement("div");
         displayChart(groupedData, graph);
@@ -309,6 +365,10 @@
           const enqueueAt = document.createElement("p");
           enqueueAt.textContent = "Enqueued at " + run.events[0].timestamp;
           outputContainer.appendChild(enqueueAt);
+
+          const podName = document.createElement("p");
+          podName.textContent = "Pod name " + run.podName;
+          outputContainer.appendChild(podName);
 
           const runContainer = document.createElement("div");
           runContainer.classList.add('run');
