@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+    <title>Parse and Group CSV Data</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+      }
+
+      h1 {
+        text-align: center;
+      }
+
+      input[type="file"] {
+        display: block;
+        margin: 20px auto;
+      }
+
+      button {
+        display: block;
+        margin: 0 auto;
+      }
+
+      #outputContainer {
+        margin-top: 20px;
+      }
+
+      h3 {
+        margin-top: 20px;
+        border-bottom: 1px solid #ccc;
+      }
+
+      h2 {
+        margin-top: 20px;
+        border-bottom: 1px solid #ccc;
+      }
+
+      ul {
+        padding-left: 20px;
+      }
+
+      li {
+        list-style: disc;
+      }
+
+      p {
+        margin-top: 5px;
+      }
+
+      .hide {
+        display: none;
+      }
+
+      .show {
+        display: block;
+      }
+
+      .warning {
+        background-color: orange;
+        color: white;
+        text-align: center;
+        padding: 10px;
+        font-weight: bold;
+      }
+
+      .run {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+      }
+
+      .tag {
+        width: 100px;
+        height: 100px;
+        background-color: cyan;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 20px;
+      }
+
+      .time {
+        width: 100px;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        background-color: red;
+        justify-content: center;
+        margin: 20px;
+        clip-path: polygon(0% 20%, 60% 20%, 60% 0%, 100% 50%, 60% 100%, 60% 80%, 0% 80%);
+      }
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+
+  <body>
+    <h1>CSV Data Grouping</h1>
+    <input type="file" id="csvFileInput" accept=".csv" />
+    <button onclick="handleFile()">Parse CSV</button>
+    <br>
+    <div class="warning hide" id="warningContainer"></div>
+    <label for="job_uuid_column">job_uuid_column:</label>
+    <input type="text" id="job_uuid_column" value="rails.metadata.job_id">
+    <br>
+    <label for="timestamp_column">timestamp_column:</label>
+    <input type="text" id="timestamp_column" value="@timestamp">
+    <br>
+    <label for="rails_tags_column">rails_tags_column:</label>
+    <input type="text" id="rails_tags_column" value="rails.tags">
+    <br>
+    <label for="queue_name_column">queue_name_column:</label>
+    <input type="text" id="queue_name_column" value="queue_name">
+    <div id="outputContainer"></div>
+    <script>
+      function handleFile() {
+        const fileInput = document.getElementById("csvFileInput");
+        const file = fileInput.files[0];
+
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = function(e) {
+            const contents = e.target.result;
+            const tableData = parseCSV(contents);
+            const jobUuidColumn = document.getElementById("job_uuid_column").value;
+            const timestampColumn = document.getElementById("timestamp_column").value;
+            const railsTagsColumn = document.getElementById("rails_tags_column").value;
+            const queueNameColumn = document.getElementById("queue_name_column").value;
+            const groupedData = groupData(tableData, jobUuidColumn, timestampColumn, railsTagsColumn, queueNameColumn);
+            displayGroupedData(groupedData);
+          };
+          reader.readAsText(file);
+        }
+      }
+
+      function parseCSV(csvText) {
+        const warningContainer = document.getElementById("warningContainer");
+        warningContainer.classList.remove('show');
+        warningContainer.classList.add('hide');
+        const rows = csvText.split("\n");
+        const data = [];
+
+        for (let i = 0; i < rows.length; i++) {
+          const row = parseCSVRow(rows[i]);
+          if (row.length > 0 || rows[i].trim().length > 0) {
+            data.push(row);
+          }
+        }
+
+        return data;
+      }
+
+      function parseCSVRow(rowText) {
+        let insideQuotes = false;
+        let cell = '';
+        const row = [];
+
+        for (let i = 0; i < rowText.length; i++) {
+          const char = rowText.charAt(i);
+
+          if (char === ',' && !insideQuotes) {
+            row.push(cell.trim());
+            cell = '';
+          } else if (char === '"') {
+            insideQuotes = !insideQuotes;
+          } else {
+            cell += char;
+          }
+        }
+
+        row.push(cell.trim());
+
+        return row;
+      }
+
+
+      function groupData(data, jobUuidColumn, timestampColumn, railsTagsColumn, queueNameColumn) {
+        const runs = [];
+        const jobUuidIndex = data[0].indexOf(jobUuidColumn);
+        const timestampIndex = data[0].indexOf(timestampColumn);
+        const tagsIndex = data[0].indexOf(railsTagsColumn);
+        const queueNameIndex = data[0].indexOf(queueNameColumn);
+
+        const warningContainer = document.getElementById("warningContainer");
+        warningContainer.innerHTML = "";
+
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          if (row.length !== data[0].length) continue; // Ignore rows with mismatched columns
+
+          const jobUuid = row[jobUuidIndex];
+          const timestamp = row[timestampIndex];
+          const tags = row[tagsIndex];
+          const queueName = row[queueNameIndex];
+
+          let run = runs.find(r => r.jobUuid.includes(jobUuid))
+
+          if (!run) {
+            run = {
+              jobUuid,
+              queueName,
+              events: [],
+            };
+            runs.push(run);
+          } else {
+            if (run.queueName !== queueName) {
+              const warningMessage = `Warning: Inconsistent queue_name for job_uuid ${jobUuid}`;
+              warningContainer.classList.remove('hide');
+              warningContainer.classList.add('show');
+              warningContainer.innerHTML += `<div class="warning">${warningMessage}</div>`;
+            }
+          }
+
+          run.events.push({
+            timestamp,
+            tags
+          });
+          run.events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        }
+
+        runs.sort((a, b) => new Date(a.events[0].timestamp) - new Date(b.events[0].timestamp))
+
+        return runs;
+      }
+
+
+      function calculateAverageAndMedian(groupedData) {
+        const timeDifferences = [];
+
+        for (const run of groupedData) {
+          const runData = run.events;
+
+          if (runData.length >= 2) {
+            const timeDiffInMillis = getTimeDifferenceInMillis(runData[0].timestamp, runData[1].timestamp);
+            timeDifferences.push(timeDiffInMillis);
+          }
+        }
+
+        const average = calculateAverage(timeDifferences);
+        const median = calculateMedian(timeDifferences);
+
+        return {
+          average,
+          median
+        };
+      }
+
+      function calculateAverage(values) {
+        if (values.length === 0) return 0;
+
+        const sum = values.reduce((acc, val) => acc + val, 0);
+        return sum / values.length;
+      }
+
+      function calculateMedian(values) {
+        if (values.length === 0) return 0;
+
+        const sortedValues = values.slice().sort((a, b) => a - b);
+        const middleIndex = Math.floor(sortedValues.length / 2);
+
+        if (sortedValues.length % 2 === 0) {
+          return (sortedValues[middleIndex - 1] + sortedValues[middleIndex]) / 2;
+        } else {
+          return sortedValues[middleIndex];
+        }
+      }
+
+      function displayGroupedData(groupedData) {
+        const outputContainer = document.getElementById("outputContainer");
+        outputContainer.innerHTML = "";
+
+        const statTitle = document.createElement("h2");
+        statTitle.textContent = "Statistics";
+        outputContainer.appendChild(statTitle);
+
+        const stats = calculateAverageAndMedian(groupedData);
+
+        const median = document.createElement("p");
+        median.textContent = "Median time in queue : " + (stats.median / 1000).toFixed(2) + " s";
+        outputContainer.appendChild(median);
+
+        const average = document.createElement("p");
+        average.textContent = "Average time in queue : " + (stats.average / 1000).toFixed(2) + " s";
+        outputContainer.appendChild(average);
+
+        const graph = document.createElement("div");
+        displayChart(groupedData, graph);
+        outputContainer.appendChild(graph);
+
+
+
+        let runNumber = 1;
+        for (const run of groupedData) {
+          const runData = run.events;
+
+          const runTitle = document.createElement("h2");
+          runTitle.textContent = "Run " + runNumber;
+          outputContainer.appendChild(runTitle);
+
+          const runQueue = document.createElement("p");
+          runQueue.textContent = "Queue " + run.queueName;
+          outputContainer.appendChild(runQueue);
+
+          const uuid = document.createElement("p");
+          uuid.textContent = "Job UUID : " + run.jobUuid;
+          outputContainer.appendChild(uuid);
+
+          const enqueueAt = document.createElement("p");
+          enqueueAt.textContent = "Enqueued at " + run.events[0].timestamp;
+          outputContainer.appendChild(enqueueAt);
+
+          const runContainer = document.createElement("div");
+          runContainer.classList.add('run');
+          outputContainer.appendChild(runContainer);
+
+          const filteredTags = runData.reduce((tags, entry) => {
+            const entryTags = entry.tags.split(",").map(tag => tag.trim());
+            return tags.concat(entryTags.filter(tag => tag !== "job"));
+          }, []);
+
+          for (let i = 0; i < filteredTags.length; i++) {
+            const tag = filteredTags[i];
+            const tagElement = document.createElement("p");
+            tagElement.textContent = tag;
+            tagElement.classList.add('tag');
+            runContainer.appendChild(tagElement);
+
+            if (i !== filteredTags.length - 1) {
+              const timeDiff = getTimeDifference(runData[i].timestamp, runData[i + 1].timestamp);
+              const timeDiffElement = document.createElement("p");
+              timeDiffElement.textContent = timeDiff;
+              timeDiffElement.classList.add('time');
+              runContainer.appendChild(timeDiffElement);
+            }
+          }
+
+          runNumber++;
+        }
+      }
+
+
+      function stringToColor(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+          hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+
+        let color = "#";
+        for (let j = 0; j < 3; j++) {
+          let value = (hash >> (j * 8)) & 0xFF;
+          color += ("00" + value.toString(16)).substr(-2);
+        }
+
+        return color;
+      }
+
+
+      function displayChart(groupedData, container) {
+        const chartData = {
+          labels: [],
+          datasets: [{
+            label: 'Time Difference between "enqueue" and "perform_start" (s)',
+            data: [],
+            backgroundColor: (context) => stringToColor(context.raw.queue),
+            borderColor: (context) => stringToColor(context.raw.queue),
+            borderWidth: 1,
+          }]
+        };
+
+
+        const showQueue = (tooltipItem) => {
+          return 'Queue : ' + tooltipItem.raw.queue
+        };
+
+        for (const jobUuid in groupedData) {
+          const runData = groupedData[jobUuid].events;
+          const enqueueIndex = runData.findIndex(entry => entry.tags.includes('enqueue'));
+          const performStartIndex = runData.findIndex(entry => entry.tags.includes('perform_start'));
+
+          if (enqueueIndex !== -1 && performStartIndex !== -1) {
+            const timeDiffInMillis = (getTimeDifferenceInMillis(runData[enqueueIndex].timestamp, runData[performStartIndex].timestamp) / 1000).toFixed(2);
+            chartData.labels.push(`Run ${jobUuid}`);
+            chartData.datasets[0].data.push({
+              time: timeDiffInMillis,
+              queue: groupedData[jobUuid].queueName,
+              id: `Run ${jobUuid}`
+            });
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.attributes.width = 400;
+        canvas.attributes.height = 200;
+
+        container.appendChild(canvas);
+
+        const ctx = canvas.getContext('2d');
+        new Chart(ctx, {
+          type: 'bar',
+          data: chartData,
+          options: {
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  afterLabel: showQueue,
+                }
+              }
+            },
+            parsing: {
+              yAxisKey: 'time',
+              xAxisKey: 'id'
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                title: {
+                  display: true,
+                  text: 'Time Difference (s)',
+                },
+              },
+              x: {
+                title: {
+                  display: true,
+                  text: 'Run',
+                }
+              }
+            }
+          }
+        });
+      }
+
+      function formatDate(date) {
+        const months = [
+          "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        ];
+        const formattedDate = months[date.getMonth()] + " " + date.getDate() + ", " + date.getFullYear() + " @ " +
+          padZero(date.getHours()) + ":" + padZero(date.getMinutes()) + ":" + padZero(date.getSeconds()) + "." + date.getMilliseconds();
+        return formattedDate;
+      }
+
+      function padZero(value) {
+        return value.toString().padStart(2, "0");
+      }
+
+      function getTimeDifference(timestamp1, timestamp2) {
+        return formatTimeDifference(getTimeDifferenceInMillis(timestamp1, timestamp2));
+      }
+
+      function getTimeDifferenceInMillis(timestamp1, timestamp2) {
+        const date1 = new Date(timestamp1);
+        const date2 = new Date(timestamp2);
+        return Math.abs(date2 - date1);
+      }
+
+      function formatTimeDifference(diffInMillis) {
+        const diffInSeconds = Math.floor(diffInMillis / 1000);
+        const hours = Math.floor(diffInSeconds / 3600);
+        const minutes = Math.floor((diffInSeconds % 3600) / 60);
+        const seconds = diffInSeconds % 60;
+        return `${padZero(hours)}:${padZero(minutes)}:${padZero(seconds)}`;
+      }
+
+    </script>
+  </body>
+
+</html>
+
